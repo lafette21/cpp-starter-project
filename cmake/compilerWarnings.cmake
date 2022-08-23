@@ -80,21 +80,9 @@ function(set_project_warnings
         message(AUTHOR_WARNING "No compiler warnings set for CXX compiler: '${CMAKE_CXX_COMPILER_ID}'")
     endif()
 
-    # Add C warnings
-    set(PROJECT_WARNINGS_C "${PROJECT_WARNINGS_CXX}")
-    list(REMOVE_ITEM
-        PROJECT_WARNINGS_C
-        -Wnon-virtual-dtor
-        -Wold-style-cast
-        -Woverloaded-virtual
-        -Wuseless-cast
-    )
-
     target_compile_options(${project_name}
         INTERFACE
         # C++ warnings
         $<$<COMPILE_LANGUAGE:CXX>:${PROJECT_WARNINGS_CXX}>
-        # C warnings
-        $<$<COMPILE_LANGUAGE:C>:${PROJECT_WARNINGS_C}>
     )
 endfunction()
