@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 # when compiling with PCH enabled
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(CMAKE_BUILD_TYPE Release)
+
 # Set the project name and language
 project(myproject
     VERSION 0.0.1
@@ -20,6 +22,11 @@ project(myproject
 # Include cmake files
 include(cmake/settings.cmake)
 include(cmake/compilerWarnings.cmake)
+include(cmake/conanConfig.cmake)
+
+run_conan()
+
+find_package(fmt REQUIRED)
 
 # Enable project warnings
 add_library(project_warnings INTERFACE)
