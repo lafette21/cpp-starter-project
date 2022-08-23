@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "11f7098b_6953c3cf",
+        "filename": "src/CMakeLists.txt",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1020417
+      },
+      "writtenOn": "2022-08-23T16:27:44Z",
+      "side": 1,
+      "message": "Rename to `example`",
+      "range": {
+        "startLine": 1,
+        "startChar": 14,
+        "endLine": 1,
+        "endChar": 18
+      },
+      "revId": "9c328dba1c52c603e0f812c1b46a04b0ac581da3",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735"
+    }
+  ]
+}
