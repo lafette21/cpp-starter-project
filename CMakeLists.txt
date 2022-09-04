@@ -18,7 +18,7 @@ project(myproject
 )
 
 # Include cmake files
-include(cmake/compilerSettings.cmake)
+include(cmake/settings.cmake)
 include(cmake/compilerWarnings.cmake)
 
 # Enable project warnings
