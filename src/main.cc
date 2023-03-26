@@ -1,8 +1,10 @@
+#include <fmt/format.h>
+
 #include <iostream>
 
-int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
+int main(int argc, [[maybe_unused]] char *argv[])
 {
-    std::cout << "Example project" << std::endl;
+    std::puts(fmt::format("Example {}", "project").c_str());
 
     return 0;
 }
