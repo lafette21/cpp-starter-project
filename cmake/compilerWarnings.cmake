@@ -5,10 +5,7 @@ include_guard()
 # https://clang.llvm.org/docs/DiagnosticsReference.html
 # https://github.com/lefticus/cppbestpractices/blob/master/02-Use_the_Tools_Available.md
 
-function(set_project_warnings
-    project_name
-    WARNINGS_AS_ERRORS
-)
+function(set_project_warnings project_name)
     set(MSVC_WARNINGS
         /W4             # Baseline reasonable warnings
         /w14242         # 'identifier': conversion from 'type1' to 'type1', possible loss of data
@@ -54,6 +51,11 @@ function(set_project_warnings
         -Wimplicit-fallthrough  # warn on statements that fallthrough without an explicit annotation
     )
 
+    if (NOT SUPPRESS_COMPILER_WERROR)
+        set(CLANG_WARNINGS ${CLANG_WARNINGS} -Werror)
+        set(MSVC_WARNINGS ${MSVC_WARNINGS} /WX)
+    endif()
+
     set(GCC_WARNINGS
         ${CLANG_WARNINGS}
         -Wmisleading-indentation    # warn if indentation implies blocks where blocks do not exist
@@ -63,38 +65,13 @@ function(set_project_warnings
         -Wuseless-cast              # warn if you perform a cast to the same type
     )
 
-    if(WARNINGS_AS_ERRORS)
-        message(TRACE "Warnings are treated as errors!")
-        list(APPEND CLANG_WARNINGS -Werror)
-        list(APPEND GCC_WARNINGS -Werror)
-        list(APPEND MSVC_WARNINGS /WX)
-    endif()
-
     if(MSVC)
-        set(PROJECT_WARNINGS_CXX ${MSVC_WARNINGS})
+        set(PROJECT_WARNINGS ${MSVC_WARNINGS})
     elseif(CMAKE_CXX_COMPILER_ID MATCHES ".*Clang")
-        set(PROJECT_WARNINGS_CXX ${CLANG_WARNINGS})
-    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        set(PROJECT_WARNINGS_CXX ${GCC_WARNINGS})
+        set(PROJECT_WARNINGS ${CLANG_WARNINGS})
     else()
-        message(AUTHOR_WARNING "No compiler warnings set for CXX compiler: '${CMAKE_CXX_COMPILER_ID}'")
+        set(PROJECT_WARNINGS ${GCC_WARNINGS})
     endif()
 
-    # Add C warnings
-    set(PROJECT_WARNINGS_C "${PROJECT_WARNINGS_CXX}")
-    list(REMOVE_ITEM
-        PROJECT_WARNINGS_C
-        -Wnon-virtual-dtor
-        -Wold-style-cast
-        -Woverloaded-virtual
-        -Wuseless-cast
-    )
-
-    target_compile_options(${project_name}
-        INTERFACE
-        # C++ warnings
-        $<$<COMPILE_LANGUAGE:CXX>:${PROJECT_WARNINGS_CXX}>
-        # C warnings
-        $<$<COMPILE_LANGUAGE:C>:${PROJECT_WARNINGS_C}>
-    )
+    target_compile_options(${project_name} INTERFACE ${PROJECT_WARNINGS})
 endfunction()
