@@ -1,224 +1,267 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env python3
 
-function usage() {
-    cat << EOF
-usage: ${1##*/} -p | --project <REPO PATH> [OPTIONS...]
+import argparse
+import logging
+import time
 
-    -p | --project <REPO PATH>              Path to the repository
+import os
+import shlex
+import subprocess
+import shutil
 
-Optional parameters:
-    -b | --build-type <BUILD TYPE>          Type of the build e.g. Debug, Release
-    -d | --delete                           Make a clean build
-    -h | --help                             Print help
-    -j | --jobs <N>                         Number of parallel jobs
-    -l | --list                             List NXS_BUILD environment variables
-    -r | --run                              Find the executable in the build dir and run it
-    -s | --sanitizer                        Turn on sanitizers (asan or tsan)
-    -t | --target <TARGET NAME>             Target to build
-         --args <"arg1, arg2, ...">         Arguments to the executed binary (in quotes)
-         --gcov-dir                         Directory in which the GCOV should run (goes through find)
-         --gcov-exclude                     Source file exclude filter for GCOV
-         --gcov-filter                      Source file filter for GCOV
-         --gcov-keep                        Do not delete gcda files after processing
-         --gdb                              Run in gdb
-         --valgrind                         Run valgrind
-         --                                 Forwarding arguments to CMake
-EOF
-}
+from enum import Enum
+from typing import List
 
-function list() {
-    echo -e "Default build settings\n"
-    echo "NXS_BUILD_TYPE   = ${NXS_BUILD_TYPE}"
-    echo "NXS_BUILD_GEN    = ${NXS_BUILD_GEN}"
-    echo "NXS_BUILD_JOBS   = ${NXS_BUILD_JOBS}"
-}
+DESCRIPTION="""
+Convenience build script for improved developer workflow.
 
-GCOV_FAIL_LIMIT=90
-GCOV_HTML_DIR="${HOME}/tmp/coverage-test"
+Everything beyond double dash (`--`) is forwarded as is to CMake configuring.
 
-NONE="<none>"
-FWD_ARGS="${NONE}"
+The script has the ability to run a given target (optionally in GDB) with
+the command line given arguments.
 
-while [[ $# -gt 0 ]]; do
-    if [[ "${FWD_ARGS}" == "${NONE}" ]]; then
-        case $1 in
-            -b | --build-type)      BUILD_TYPE="$2";    shift ;;
-            -d | --delete)          DELETE=1;           ;;
-            -j | --jobs)            JOBS="$2";          shift ;;
-            -l | --list)            list; exit 0;       ;;
-            -p | --project)         PATH_REPO="$2";     shift ;;
-            -r | --run)             RUN=1;              ;;
-            -s | --sanitizer)       SANITIZER="$2";     shift ;;
-            -t | --target)          TARGET="$2";        shift ;;
-                 --args)            BINARY_ARGS="$2";   shift ;;
-                 --gcov-dir)        GCOV_DIR="$2";      shift ;;
-                 --gcov-exclude)    GCOV_EXCLUDE="$2";  shift ;;
-                 --gcov-filter)     GCOV_FILTER="$2";   shift ;;
-                 --gcov-keep)       GCOV_KEEP=1;        ;;
-                 --gdb)             GDB=1;              ;;
-                 --valgrind)        VALGRIND=1;         ;;
-            --)                     FWD_ARGS="";        ;;
-            -h | --help)            usage ${0##*/};     exit 0;;
-            *)                      usage; exit 255;;
-        esac
-    else
-        FWD_ARGS="${FWD_ARGS}$1 "
-    fi
-    shift
-done
+It manages separate build directories for different build configurations.
 
-# -------------------------------------==[ Initializing ]==-----------------------------------------
+`compile_commands.json` is automatically linked to the root of the project.
+"""
 
-# Error checking
-if [[ -z "${PATH_REPO}" ]]; then
-    echo "No path to the repository provided."
-    echo "Don't know what to build!"
-    exit 1
-fi
+EPILOG="""
+Minimal example
+  build -p ~/repos/nexus
 
-BUILD_TYPE="${BUILD_TYPE-$NXS_BUILD_TYPE}"
-if [[ -z "${BUILD_TYPE}" ]]; then
-    echo "No build type specified"
-    exit 2
-fi
+Example with running tests in GDB
+  build -p ~/repos/nexus -t test_nexus -s asan -r --exe-args '[units]' --gdb -- -DSUPPRESS_COMPILER_WERROR=1
+"""
 
-GENERATOR="${NXS_BUILD_GEN-"Unix Makefiles"}"
-TARGET="${TARGET-"all"}"
 
-if [[ -z "${JOBS}" ]]; then
-    JOBS="${NXS_BUILD_JOBS-$(($(nproc)-2))}"
-fi
+class AnsiColors(Enum):
+    DARK_GREY = "\x1b[30;1m"
+    RED       = "\x1b[31;20m"
+    BOLD_RED  = "\x1b[31;1m"
+    GREEN     = "\x1b[32;20m"
+    YELLOW    = "\x1b[33;20m"
+    BLUE      = "\x1b[34;20m"
+    PURPLE    = "\x1b[35;20m"
+    CYAN      = "\x1b[36;20m"
+    WHITE     = "\x1b[37;1m"
+    GREY      = "\x1b[38;20m"
+    DEFAULT   = "\x1b[0m"
 
-if [[ -z "${CXX}" ]]; then
-    echo "CXX environment variable is not set"
-    exit 3
-fi
 
-# Checking build file according to the provided generator
-if [[ "${GENERATOR}" == "Ninja" ]]; then
-    BUILD_FILE="build.ninja"
-elif [[ "${GENERATOR}" == "Unix Makefiles" ]]; then
-    BUILD_FILE="Makefile"
-fi
+class ColorLogFormatter(logging.Formatter):
+    formats = {
+        logging.DEBUG:    "%(asctime)s [%(name)s] {}%(levelname)s:{} %(message)s".format(AnsiColors.BLUE.value, AnsiColors.DEFAULT.value),
+        logging.INFO:     "%(asctime)s [%(name)s] {}%(levelname)s:{} %(message)s".format(AnsiColors.GREEN.value, AnsiColors.DEFAULT.value),
+        logging.WARNING:  "%(asctime)s [%(name)s] {}%(levelname)s:{} %(message)s".format(AnsiColors.YELLOW.value, AnsiColors.DEFAULT.value),
+        logging.ERROR:    "%(asctime)s [%(name)s] {}%(levelname)s:{} %(message)s".format(AnsiColors.RED.value, AnsiColors.DEFAULT.value),
+        logging.CRITICAL: "%(asctime)s [%(name)s] {}%(levelname)s:{} %(message)s".format(AnsiColors.BOLD_RED.value, AnsiColors.DEFAULT.value)
+    }
 
-BUILD_DIR_SUFFIX="${SANITIZER:+-${SANITIZER}}"
-BUILD_DIR="${PATH_REPO}/build/${BUILD_TYPE:l}-${CXX##*/}${BUILD_DIR_SUFFIX}"
+    def format(self, record):
+        log_fmt = self.formats.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
 
-if [[ -n "${DELETE}" ]]; then
-    echo "Removing ${BUILD_DIR}"
-    rm -rfI "${BUILD_DIR}"
-fi
 
-mkdir -p "${BUILD_DIR}"
+log_handler = logging.StreamHandler()
+log_handler.setFormatter(ColorLogFormatter())
 
-if [[ "${FWD_ARGS}" == "${NONE}" ]]; then
-    FWD_ARGS=""
-fi
+logger = logging.getLogger("Builder")
+logger.addHandler(log_handler)
 
-# -----------------------------------------==[ MAIN ]==---------------------------------------------
 
-(cd "${BUILD_DIR}" &&
-cmake "${(z)FWD_ARGS}" \
-      "${SANITIZER:+-DSANITIZERS=${SANITIZER}}" \
-      -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-      -G"${GENERATOR}" \
-      "${PATH_REPO}"
-)
+def create_symlink(src: str, dst: str):
+    """ Create symlink if it does not exist, else check if it points to a valid
+    path and unlink if it is a broken link """
 
-if [[ ! -h "${PATH_REPO}/compile_commands.json" ]]; then
-    ln -sv "${BUILD_DIR}/compile_commands.json" \
-        "${PATH_REPO}/compile_commands.json"
-fi
+    if os.path.exists(dst):
+        return
 
-CMD_BUILD="cmake --build ${BUILD_DIR} --target ${TARGET} -- -j${JOBS}"
-eval "${CMD_BUILD}"
+    if os.path.lexists(dst):
+        os.unlink(dst)
+    os.symlink(src, dst)
 
-if [[ $? != 0 ]]; then
-    echo -e "${COLOR_RED}  ----==[ BUILD FAILED ! ]==----"
-    return 2
-fi
 
-# VALGRIND_OPTIONS="--tool=memcheck"
-VALGRIND_OPTIONS="--tool=massif"
+def run_command(command: str, shell=False) -> int:
+    """ Run a command
 
-# Run executable
-if [[ -n "${RUN}" ]]; then
-    PATH_BIN=$(find "${BUILD_DIR}" -name "${TARGET}")
-    if [[ $(echo "${PATH_BIN}" | wc -l) -gt 1 ]]; then
-        echo -e "Multiple executable found:\n${PATH_BIN}"
-        exit 3
-    fi
+    Returns with the code returned by the process.
+    Raises exception if the `command` is not valid.
+    """
 
-    echo "Executable found at: ${PATH_BIN}"
-    if [[ -n "${GDB}" ]]; then
-        gdb --args "${PATH_BIN}" ${(z)BINARY_ARGS}
-    elif [[ -n "${VALGRIND}" ]]; then
-        valgrind "${(z)VALGRIND_OPTIONS}" "${PATH_BIN}" ${(z)BINARY_ARGS}
-    else
-        "${PATH_BIN}" ${(z)BINARY_ARGS}
-        RETCODE_BIN=$?
-    fi
+    if command in ["", None]:
+        raise Exception("Command cannot be empty or `None`")
 
-    if [[ $RETCODE_BIN != 0 ]]; then
-        if [[ "${PATH_BIN}" =~ /test/ ]]; then
-            echo -e "${COLOR_RED}  ----==[ TEST FAILED ! ]==----"
-        else
-            echo -e "${COLOR_RED}  ----==[ Executable returned with error ! ]==----"
-        fi
-        exit $RETCODE_BIN
-    fi
-fi
+    result = subprocess.run(shlex.split(command), shell=shell)
+    return result.returncode
 
-if [[ "${BUILD_TYPE}" == "coverage" ]]; then
-    if [[ -z "${GCOV_DIR}" ]]; then
-        echo -e "${COLOR_BLUE}  ----==[ Missing gcov dir ! ]==----"
-        exit 1
-    fi
 
-    if [[ -e "${GCOV_HTML_DIR}" ]]; then
-        rm -rf "${GCOV_HTML_DIR}"
-    fi
+def configure(project: str,
+              build_dir: str,
+              build_type: str,
+              generator: str,
+              sanitizer: str,
+              forward_args: List[str] =None,
+              **kwargs):
+    """ Configure a CMake a project
 
-    mkdir -p "${GCOV_HTML_DIR}"
+    Note: no error checking (arguments should be validate beforehand)
+    """
 
-    GCOV_WORK_DIR=$(find "${BUILD_DIR}" -type d -name "${GCOV_DIR}")
-    RUN_GCOV="gcovr ${GCOV_WORK_DIR} \
-        --object-directory ${GCOV_WORK_DIR} \
-        --root ${PATH_REPO} \
-        --filter .\*${GCOV_DIR}/.\*${GCOV_FILTER}.\* \
-        --exclude .\*test/Test.\* \
-        --fail-under-line ${GCOV_FAIL_LIMIT} \
-        --print-summary \
-        --html-details \
-        --output ${GCOV_HTML_DIR}/main.html"
+    cmake_cmd = " ".join([
+        f"cmake -S {project} -B {build_dir}",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        f"-G{generator}"
+    ])
 
-        # --fail-under-branch ${GCOV_FAIL_LIMIT} \
+    if sanitizer != "nosan":
+        cmake_cmd += f" -DSANITIZERS={sanitizer}"
 
-    if [[ -n "${GCOV_EXCLUDE}" ]]; then
-        RUN_GCOV+=" --exclude .\*${GCOV_EXCLUDE}.\*"
-    fi
+    if forward_args is not None:
+        cmake_cmd += f" {' '.join(forward_args)}"
 
-    if [[ -z "${GCOV_KEEP}" ]]; then
-        RUN_GCOV+=" --delete"
-    fi
+    run_command(cmake_cmd)
 
-    eval "(cd ${GCOV_WORK_DIR} && ${RUN_GCOV})"
 
-    RETCODE_COV=$?
-    if [[ $RETCODE_COV != 0 ]]; then
-        echo -e "${COLOR_PURPLE}  ----==[ COVERAGE TEST FAILED ! ]==----"
-        if [[ $RETCODE_COV == 2 ]]; then
-            echo -e "${COLOR_PURPLE}         Line coverage under ${GCOV_FAIL_LIMIT}%"
-        elif [[ $RETCODE_COV == 4 ]]; then
-            echo -e "${COLOR_PURPLE}        Branch coverage under ${GCOV_FAIL_LIMIT}%"
-        elif [[ $RETCODE_COV == 6 ]]; then
-            echo -e "${COLOR_PURPLE}    Line and branch coverage under ${GCOV_FAIL_LIMIT}%"
-        else
-            echo -e "${COLOR_RED}  ----==[ Unknown GCOV error ! ]==----"
-        fi
-        exit 4
-    else
-        echo -e "${COLOR_GREEN}  ----==[ COVERAGE TEST PASSED ]==----"
-    fi
-fi
+def build(build_dir: str,
+          target: str,
+          jobs: int):
+    """ Build a configured CMake project """
+
+    start = time.time()
+    retcode = run_command(f"cmake --build {build_dir} --target {target} -- -j{jobs}")
+    logger.debug("Build took {:.3f} seconds".format(time.time() - start))
+    if retcode != 0:
+        raise Exception("Build failed")
+
+
+def find_file(target: str, where: str) -> str:
+    """ Find a file in a given path
+
+    Raises exception if the file cannot be found.
+    """
+
+    # TODO: check for multiple finds
+    for root, dir, files in os.walk(where):
+        if target in files:
+            return os.path.join(root, target)
+    raise Exception(f"`{target}` cannot be found in `{where}`")
+
+
+def run(build_dir: str, target: str, args: List[str], gdb: bool):
+    """ Run the specified target with the given arguments (if any) optionally in GDB """
+
+    if target == "all":
+        raise Exception("No explicit `target` were given to `run`")
+
+    exe = find_file(target, build_dir)
+
+    if len(args) > 0:
+        exe = " ".join([exe, " ".join(args)])
+
+    logger.info(f"Running executable: {exe}")
+
+    if not gdb:
+        retcode = run_command(exe)
+        logger.info(f"Executable returned with {retcode}")
+    else:
+        run_command(" ".join(["gdb", "--args", exe]))
+
+    return
+
+
+def create_build_path(project: str, build_type: str, compiler: str, sanitizer: str) -> str:
+    """ Create a build path with the build dir containing the following information
+
+    * build type in lowercase, e.g. `debug` or `release`
+    * compiler name - source: CC and CXX
+    * compiler version (if not the default is in use) - source: CC and CXX
+    * sanitizers (if used)
+    """
+
+    if sanitizer == "nosan":
+        san = ""
+    else:
+        san = f"-{sanitizer}"
+
+    return os.path.join(
+        os.path.realpath(project),
+        "build",
+        f"{build_type.lower()}-{os.path.basename(compiler)}{san}"
+    )
+
+
+def create_compile_cmd_symlink(src: str, dst: str):
+    create_symlink(
+        os.path.join(src, "compile_commands.json"),
+        os.path.join(dst, "compile_commands.json")
+    )
+
+
+def checks():
+    """ Generic sanity check(s) """
+    if os.getenv("CC") == "" or os.getenv("CXX") == "":
+        raise Exception("Compiler environment variables are not defined (CC and/or CXX)!")
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="Build script",
+        usage="build --project PATH [options]",
+        description=DESCRIPTION,
+        epilog=EPILOG,
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+
+    parser.add_argument("-p", "--project", required=True)
+
+    parser.add_argument("-b", "--build-type", default="Debug")
+    parser.add_argument("-d", "--delete", action="store_true", help="Clean build")
+    parser.add_argument("-g", "--generator", default="'Unix Makefiles'", choices=["'Unix Makefiles'", "Ninja"])
+    parser.add_argument("-j", "--jobs", default=1)
+    parser.add_argument("-s", "--sanitizer", default="nosan", choices=["asan", "tsan"])
+    parser.add_argument("-t", "--target", default="all")
+    parser.add_argument("-r", "--run", action="store_true")
+    parser.add_argument(      "--exe-args", nargs="+", default="", help="Forwarding arguments to the target to be run")
+    parser.add_argument(      "--gdb", action="store_true", help="Run in GDB")
+    parser.add_argument(      "--no-configure", action="store_true", help="Skip CMake reconfiguring")
+    parser.add_argument("-v", "--verbose", action="store_true")
+
+    subparsers = parser.add_subparsers()
+    parser_fwd = subparsers.add_parser("--", prefix_chars="+", help="Forwarding arguments to CMake configuring")
+    parser_fwd.add_argument("forward_args", nargs="*")
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_arguments()
+    checks()
+
+    build_dir = create_build_path(args.project, args.build_type, os.getenv("CXX"), args.sanitizer)
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+
+    if args.delete:
+        if input(f"Are you sure to remove `{build_dir}` (press 'y' to proceed): ") == "y":
+            shutil.rmtree(build_dir)
+
+    if not args.no_configure:
+        configure(build_dir=build_dir, **vars(args))
+        create_compile_cmd_symlink(build_dir, args.project)
+
+    build(build_dir, args.target, args.jobs)
+
+    if args.run:
+        run(build_dir, args.target, args.exe_args, args.gdb)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as ex:
+        logger.error(f"Exception: {ex}")
