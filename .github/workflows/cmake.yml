@@ -24,7 +24,7 @@ jobs:
         version: 1.60.0
 
     - name: Install gcc-13
-      if: runner.os == 'Linux' &&
+      if: runner.os == 'Linux'
       run: |
         sudo update-alternatives --remove-all gcc
         sudo apt install -y gcc-13
