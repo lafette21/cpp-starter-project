@@ -20,9 +20,9 @@ run_conan()
 add_library(project_warnings INTERFACE)
 set_project_warnings(project_warnings)
 
+# Enable testing
+enable_testing()
+
 # Add the subdirectories
 add_subdirectory(src)
 add_subdirectory(unit-tests)
-
-# Enable testing
-enable_testing()
