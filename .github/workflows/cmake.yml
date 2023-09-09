@@ -25,7 +25,10 @@ jobs:
 
     - name: Install gcc-13
       if: runner.os == 'Linux'
-      run: sudo apt install -y gcc-13
+      run: |
+        sudo apt install -y gcc-13
+        export CC=/usr/bin/gcc-13
+        export CXX=/usr/bin/g++-13
 
     - name: Build
       run: |
