@@ -23,6 +23,10 @@ jobs:
       with:
         version: 1.60.0
 
+    - name: Install gcc-13
+      if: runner.os == 'Linux'
+      run: sudo apt install -y gcc-13
+
     - name: Build
       run: |
         cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
