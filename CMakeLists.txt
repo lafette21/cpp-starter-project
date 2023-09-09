@@ -1,16 +1,16 @@
-cmake_minimum_required(VERSION 3.16...3.23)
+cmake_minimum_required(VERSION 3.16)
 
 # Set the project name and language
 project(myproject
     VERSION 0.0.1
     DESCRIPTION ""
-    HOMEPAGE_URL "%%myurl%%"
+    HOMEPAGE_URL ""
     LANGUAGES CXX C
 )
 
 # Include cmake files
-include(cmake/compilerWarnings.cmake)
-include(cmake/conanConfig.cmake)
+include(cmake/compiler-warnings.cmake)
+include(cmake/conan-config.cmake)
 include(cmake/settings.cmake)
 
 # Setup Conan
@@ -20,8 +20,9 @@ run_conan()
 add_library(project_warnings INTERFACE)
 set_project_warnings(project_warnings)
 
-# Add the src directory
-add_subdirectory(src)
-
 # Enable testing
 enable_testing()
+
+# Add the subdirectories
+add_subdirectory(src)
+add_subdirectory(unit-tests)

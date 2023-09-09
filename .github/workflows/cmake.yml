@@ -1,0 +1,40 @@
+name: CMake
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ macos-latest, ubuntu-latest, windows-latest ]
+        build_type: [ Debug, Release ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Prepare
+      uses: turtlebrowser/get-conan@main
+      with:
+        version: 1.60.0
+
+    - name: Install gcc-13
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt update
+        sudo apt install -y gcc-13 g++-13
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
+
+    - name: Build
+      run: |
+        cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }}
+
+    - name: Unit Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest -C ${{ matrix.build_type }}
